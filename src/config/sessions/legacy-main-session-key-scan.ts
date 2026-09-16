@@ -1,7 +1,7 @@
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
-import { readClaim } from "./legacy-main-session-migration-operations.js";
+import { readClaim } from "./legacy-main-session-migration-claims.js";
 import type { PhysicalStore, SessionClaim } from "./legacy-main-session-migration.contract.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 

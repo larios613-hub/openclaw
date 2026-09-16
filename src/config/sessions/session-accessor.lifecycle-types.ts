@@ -1,6 +1,8 @@
+import type { OpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type { ConversationRouteContext } from "./conversation-route-context.js";
 import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
+import type { SqliteSessionGenerationClaim } from "./session-accessor.sqlite-generation-copy.js";
 import type { SessionResetBoundaryRequest } from "./session-reset-boundary-event.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -96,8 +98,14 @@ export type DeleteSessionEntryLifecycleParams = {
   deleteDeliveryArtifacts?: boolean;
   /** Optional exact row guard checked under the storage writer lock. */
   expectedEntry?: SessionEntry;
+  /** Bind a cross-store handoff to the original physical source at deletion admission. */
+  expectedDatabaseIdentity?: OpenClawAgentDatabaseIdentity;
   /** Optional exact ordered transcript guard checked in the deleting SQLite transaction. */
   expectedTranscript?: { sessionId: string; eventJson: readonly string[] };
+  /** Compare remaining source generations with their verified cross-store handoff. */
+  expectedGenerations?: readonly SqliteSessionGenerationClaim[];
+  /** Guard logical-node artifacts when planning or committing entry removal. */
+  expectedNodeArtifactFingerprint?: string;
   /** Optional provider-run identity guard checked under the storage writer lock. */
   expectedSessionId?: string | null;
   /** Optional owner revision guard checked under the storage writer lock. */

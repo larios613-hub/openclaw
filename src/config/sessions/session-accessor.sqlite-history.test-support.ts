@@ -1,5 +1,41 @@
+import { afterEach, beforeEach, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
-import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  type OpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+
+export function useHistoryEventScope() {
+  const env: NodeJS.ProcessEnv = {};
+  const scope = {
+    agentId: "main",
+    env,
+    sessionId: "history-events-test",
+    sessionKey: "agent:main:history-events-test",
+  };
+  const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
+      cleanup();
+    });
+  });
+  beforeEach(() => {
+    scope.env = {
+      ...process.env,
+      OPENCLAW_STATE_DIR: tempDirs.make("openclaw-history-events-"),
+    };
+  });
+  return scope;
+}
+
+export function historyEventId(entry: { event: unknown } | undefined): unknown {
+  const event = entry?.event;
+  return event && typeof event === "object" && "id" in event ? event.id : undefined;
+}
 
 export function insertSyntheticHistory(
   database: OpenClawAgentDatabase,

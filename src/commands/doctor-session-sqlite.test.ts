@@ -20,7 +20,7 @@ import {
   readSessionTranscriptHistoryEventCount,
   readSessionTranscriptHistoryEventPage,
 } from "../config/sessions/session-accessor.sqlite-history-events.js";
-import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite-import.js";
+import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite-import.test-support.js";
 import {
   loadTranscriptEventsSync,
   readTranscriptStatsSync,

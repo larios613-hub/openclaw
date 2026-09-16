@@ -19,8 +19,8 @@ import {
   readClaimsFromStore,
   storeHasLegacyAgentSessionKey,
 } from "./legacy-main-session-key-scan.js";
+import { claimsMatch, restoreColdSessionClaims } from "./legacy-main-session-migration-claims.js";
 import {
-  claimsMatch,
   processIdenticalClaims,
   repairDivergentClaims,
   samePhysicalStore,
@@ -33,7 +33,7 @@ import type {
   PhysicalStore,
   SessionClaim,
 } from "./legacy-main-session-migration.contract.js";
-import { resolveSessionStorePathCore } from "./paths.js";
+import { resolveSessionArtifactDirectory, resolveSessionStorePathCore } from "./paths.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import {
   resolveAllAgentSessionStoreCandidateTargetsSync,
@@ -515,6 +515,12 @@ async function migrateLegacyMainSessionKeysInternal(
     ownerStorePath: destinationLogical,
     path: destinationResolved.path,
   };
+  const destinationArchiveDirectory =
+    operationMode === "detect"
+      ? undefined
+      : resolveMissingPhysicalPath(
+          path.join(resolveSessionArtifactDirectory(destinationResolved.path), "cold"),
+        );
 
   const byCanonical = new Map<string, SessionClaim[]>();
   for (const claim of allLegacy) {
@@ -524,6 +530,19 @@ async function migrateLegacyMainSessionKeysInternal(
   }
   for (const [canonicalKey, aliases] of byCanonical) {
     const canonicalClaims = allCanonical.filter((claim) => claim.key === canonicalKey);
+    if (
+      operationMode !== "detect" &&
+      [...aliases, ...canonicalClaims].some(
+        (claim) =>
+          !samePhysicalStore(claim.store, destination) ||
+          resolveMissingPhysicalPath(
+            path.join(resolveSessionArtifactDirectory(claim.store.path), "cold"),
+          ) !== destinationArchiveDirectory,
+      )
+    ) {
+      await restoreColdSessionClaims(aliases, env, params.beforePersistentApply);
+      await restoreColdSessionClaims(canonicalClaims, env, params.beforePersistentApply);
+    }
     const destinationCanonical = canonicalClaims.find((claim) =>
       samePhysicalStore(claim.store, destination),
     );
