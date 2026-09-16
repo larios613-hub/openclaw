@@ -14,34 +14,6 @@ jobs:
       matrix:
         include:
           - {
-              "name": "bm32",
-              "label": "blacksmith-32vcpu-ubuntu-2404",
-              "provider": "blacksmith",
-              "workers": 4,
-              "storage": "default",
-            }
-          - {
-              "name": "c8i-ebs",
-              "label": "runs-on=${{ github.run_id }}/cpu=16/ram=32/family=c8i/spot=true/volume=80gb",
-              "provider": "runson",
-              "workers": 6,
-              "storage": "ebs",
-            }
-          - {
-              "name": "c7a-ebs",
-              "label": "runs-on=${{ github.run_id }}/cpu=16/ram=32/family=c7a/spot=true/volume=80gb",
-              "provider": "runson",
-              "workers": 6,
-              "storage": "ebs",
-            }
-          - {
-              "name": "c7a-tmpfs",
-              "label": "runs-on=${{ github.run_id }}/cpu=16/ram=32/family=c7a/spot=true/volume=80gb",
-              "provider": "runson",
-              "workers": 6,
-              "storage": "tmpfs",
-            }
-          - {
               "name": "m7a-full-tmpfs",
               "label": "runs-on=${{ github.run_id }}/cpu=16/ram=64/family=m7a/spot=true/volume=80gb",
               "provider": "runson",
@@ -54,27 +26,6 @@ jobs:
               "provider": "runson",
               "workers": 6,
               "storage": "nvme",
-            }
-          - {
-              "name": "c7a-fast-ebs",
-              "label": "runs-on=${{ github.run_id }}/cpu=16/ram=32/family=c7a/spot=true/volume=80gb:gp3:1000mbs:16000iops",
-              "provider": "runson",
-              "workers": 6,
-              "storage": "ebs",
-            }
-          - {
-              "name": "hosted",
-              "label": "ubuntu-24.04",
-              "provider": "hosted",
-              "workers": 3,
-              "storage": "default",
-            }
-          - {
-              "name": "bm32-tmpfs",
-              "label": "blacksmith-32vcpu-ubuntu-2404",
-              "provider": "blacksmith",
-              "workers": 4,
-              "storage": "tmpfs",
             }
     env:
       CI: "true"
@@ -108,9 +59,19 @@ jobs:
             test -d /mnt/ephemeral
             findmnt /mnt/ephemeral
             lsblk -o NAME,TYPE,SIZE,FSTYPE,MOUNTPOINTS,MODEL
-            for directory in /tmp "$GITHUB_WORKSPACE"; do
-              test "$(findmnt -T "$directory" -n -o MAJ:MIN)" = "$(findmnt -T /mnt/ephemeral -n -o MAJ:MIN)"
-            done
+            sudo python3 - /tmp "$GITHUB_WORKSPACE" <<'PYTHON'
+          import json, os, subprocess, sys
+          device = os.stat('/mnt/ephemeral').st_dev
+          for directory in sys.argv[1:]:
+              mount = json.loads(subprocess.check_output(['findmnt', '--json', '-T', directory, '-o', 'FSTYPE,SOURCE,OPTIONS']))['filesystems'][0]
+              backing = directory
+              if mount['fstype'] == 'overlay':
+                  options = dict(option.split('=', 1) for option in mount['options'].split(',') if '=' in option)
+                  backing = options['upperdir']
+              if os.stat(backing).st_dev != device:
+                  raise SystemExit(f'Not backed by instance store: {directory} -> {backing}')
+              print(f'BENCH_NVME path={directory} fstype={mount["fstype"]} backing={backing}', flush=True)
+          PYTHON
             echo "BENCH_STORAGE nvme=automatic-runson-ephemeral"
           fi
           for directory in /tmp "$GITHUB_WORKSPACE"; do
@@ -232,8 +193,7 @@ jobs:
           rm -rf -- "$store_path"
           mkdir -p "$store_path"
           if [[ "$BENCH_STORAGE" == full-tmpfs ]]; then
-            mkdir -p "$GITHUB_WORKSPACE/.provider-bench-store"
-            sudo mount --bind "$GITHUB_WORKSPACE/.provider-bench-store" "$store_path"
+            test "$(findmnt -T "$store_path" -n -o FSTYPE)" = tmpfs
           fi
           findmnt -T "$store_path"
           echo "BENCH_STORE path=$store_path"
