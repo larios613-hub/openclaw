@@ -14,6 +14,7 @@ import {
   readDeferredPluginMigrations,
   recordDeferredPluginMigrations,
 } from "../infra/deferred-plugin-migrations.js";
+import { readDeferredPluginSessionImport } from "../infra/deferred-plugin-session-sources.js";
 import * as directoryDurability from "../infra/directory-durability.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -26,6 +27,78 @@ import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";
 afterEach(() => vi.restoreAllMocks());
 
 describe("session sources needed by deferred plugin migrations", () => {
+  it.each([2, 32])(
+    "reads each archive manifest once per verification of %s retained transcripts",
+    async (transcriptCount) => {
+      await withOpenClawTestState({ label: "deferred-plugin-manifest-reads" }, async (state) => {
+        const { cfg, storePath, scope } = seedDeferredPluginSessionSource(state);
+        const entries = JSON.parse(fs.readFileSync(storePath, "utf8"));
+        for (let index = 2; index < transcriptCount; index++) {
+          const sessionId = `legacy-volume-${index}`;
+          const sessionFile = `${sessionId}.jsonl`;
+          entries[`agent:main:volume-${index}`] = { sessionId, sessionFile, updatedAt: 20 };
+          fs.writeFileSync(
+            path.join(path.dirname(storePath), sessionFile),
+            `${JSON.stringify({ type: "session", version: 3, id: sessionId })}\n`,
+          );
+        }
+        fs.writeFileSync(storePath, JSON.stringify(entries));
+        const run = () =>
+          runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode: "import" });
+        expect((await run()).totals.importedEntries).toBe(transcriptCount);
+        recordDeferredPluginMigrations({
+          env: state.env,
+          pending: [],
+          resolvedPluginIds: ["fixture-plugin"],
+        });
+        const archived = await run();
+        expect(archived.totals.importedEntries).toBe(0);
+        expect(archived.totals.archivedTranscriptFiles).toBe(transcriptCount);
+        expect(fs.existsSync(storePath)).toBe(false);
+        const manifestPaths = migrationRun.listSessionSqliteMigrationManifestPaths(state.env);
+        const manifestPath = archived.migrationRun!.manifestPath;
+        const manifestBytes = fs.readFileSync(manifestPath);
+        const manifest = migrationRun.readSessionSqliteMigrationManifest(manifestPath)!;
+        const transcriptMove = manifest.targets
+          .flatMap((target) => target.plannedMoves)
+          .find((move) => move.kind === "transcript")!;
+        const read = () =>
+          readDeferredPluginSessionImport({
+            cfg,
+            env: state.env,
+            target: { agentId: "main", storePath },
+            sqlitePath: resolveSqliteTargetFromSessionStorePath(storePath, scope).path,
+          });
+        const reads = vi.spyOn(fs, "readFileSync");
+        for (let pass = 0; pass < 2; pass++) {
+          reads.mockClear();
+          expect(read()?.sources).toHaveLength(transcriptCount + 1);
+          const manifestsRead = reads.mock.calls.flatMap(([file]) =>
+            typeof file === "string" && manifestPaths.includes(file) ? [file] : [],
+          );
+          expect(manifestsRead.length).toBeGreaterThan(0);
+          expect(manifestsRead.length).toBe(new Set(manifestsRead).size);
+        }
+        reads.mockRestore();
+
+        for (const target of manifest.targets) {
+          target.plannedMoves = target.plannedMoves.filter(
+            (move) => move.sourcePath !== transcriptMove.sourcePath,
+          );
+          target.completedMoves = target.completedMoves.filter(
+            (move) => move.sourcePath !== transcriptMove.sourcePath,
+          );
+        }
+        fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+        expect(read).toThrow("Retained session migration source changed");
+        fs.writeFileSync(manifestPath, manifestBytes);
+        expect(read()?.sources).toHaveLength(transcriptCount + 1);
+        fs.appendFileSync(transcriptMove.archivePath, "\n");
+        expect(read).toThrow("Retained session migration source changed");
+      });
+    },
+  );
+
   it.each([
     { kind: "transcript", unusedAgent: false },
     { kind: "legacy-store", unusedAgent: false },

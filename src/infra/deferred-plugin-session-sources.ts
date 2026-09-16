@@ -104,11 +104,13 @@ function databaseIdentity(sqlitePath: string): string {
   return `${file.dev}:${file.ino}`;
 }
 
-function resolveArchivedSource(
-  source: DeferredPluginSessionImport["sources"][number],
+function collectArchivedSources(
+  sources: DeferredPluginSessionImport["sources"],
   target: SessionImportTarget,
   env: NodeJS.ProcessEnv,
-): string | undefined {
+): Map<string, string[]> {
+  const identities = new Map(sources.map((source) => [source.path, source.identity]));
+  const archives = new Map<string, string[]>();
   for (const manifestPath of listSessionSqliteMigrationManifestPaths(env)) {
     const manifest = readSessionSqliteMigrationManifest(manifestPath);
     if (!manifest) {
@@ -116,31 +118,34 @@ function resolveArchivedSource(
     }
     for (const candidate of filterRestoreManifestTargets(manifest, [target])) {
       for (const move of candidate.plannedMoves) {
-        if (
-          move.sourcePath === source.path &&
-          move.artifact &&
-          sameMigrationArtifact(move.artifact.identity, source.identity) &&
-          statMigrationPath(move.archivePath) &&
-          sameMigrationArtifact(readMigrationArtifactIdentity(move.archivePath), source.identity)
-        ) {
-          return move.archivePath;
+        const identity = identities.get(move.sourcePath);
+        if (identity && move.artifact && sameMigrationArtifact(move.artifact.identity, identity)) {
+          const paths = archives.get(move.sourcePath) ?? [];
+          paths.push(move.archivePath);
+          archives.set(move.sourcePath, paths);
         }
       }
     }
   }
-  return undefined;
+  return archives;
 }
 
 function resolveVerifiedSessionSource(
   source: DeferredPluginSessionImport["sources"][number],
-  target: SessionImportTarget,
-  env: NodeJS.ProcessEnv,
+  readArchives: () => ReadonlyMap<string, readonly string[]>,
 ): string | undefined {
-  return statMigrationPath(source.path)
-    ? sameMigrationArtifact(readMigrationArtifactIdentity(source.path), source.identity)
+  if (statMigrationPath(source.path)) {
+    return sameMigrationArtifact(readMigrationArtifactIdentity(source.path), source.identity)
       ? source.path
-      : undefined
-    : resolveArchivedSource(source, target, env);
+      : undefined;
+  }
+  return readArchives()
+    .get(source.path)
+    ?.find(
+      (archivePath) =>
+        statMigrationPath(archivePath) &&
+        sameMigrationArtifact(readMigrationArtifactIdentity(archivePath), source.identity),
+    );
 }
 
 function assertVerifiedSessionSources(
@@ -148,9 +153,14 @@ function assertVerifiedSessionSources(
   receipt: DeferredPluginSessionImport,
 ): void {
   const target = { ...params.target, sqlitePath: params.sqlitePath };
+  // Archive locators share this synchronous verification only; each source's
+  // bytes are still checked, and a later pass rereads manifests after publication.
+  let archives: Map<string, string[]> | undefined;
+  const readArchives = () =>
+    (archives ??= collectArchivedSources(receipt.sources, target, params.env));
   const verifiedPaths = new Map<string, string>();
   for (const source of receipt.sources) {
-    const verifiedPath = resolveVerifiedSessionSource(source, target, params.env);
+    const verifiedPath = resolveVerifiedSessionSource(source, readArchives);
     if (!verifiedPath) {
       throw new Error(
         `Retained session migration source changed: ${source.path}. Resolve the source conflict before running openclaw doctor --fix again; the verified import was not replayed.`,
