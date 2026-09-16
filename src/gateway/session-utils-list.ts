@@ -4,8 +4,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { listAgentIds, withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import type { SessionEntry } from "../config/sessions.js";
+import type { GatewayStoredSessionTargets } from "../config/sessions/combined-store-gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withPinnedActivePluginRegistryWorkspaceDir } from "../plugins/runtime-workspace-state.js";
 import {
@@ -25,12 +27,10 @@ import {
 import { sortAndLimitSessionEntries } from "./session-list-order.js";
 import { readSessionTitleFieldsFromTranscriptBatch as readScopedSessionTitleFieldsFromTranscriptBatch } from "./session-transcript-title-reader.js";
 import type {
-  ListSessionsFromStoreParams,
   SessionActorProfileIdentity,
-  SessionListCpuTiming,
+  SessionListActiveRunProjector,
   SessionListRowContext,
   SessionListRowContextProvider,
-  SessionSelectionScope,
 } from "./session-utils-contracts.js";
 import { deriveSessionTitle, buildStoreChildSessionIndexWork } from "./session-utils-core.js";
 import { getSessionDefaults } from "./session-utils-model.js";
@@ -39,7 +39,11 @@ import {
   populateSessionListAcpMetadataWork,
 } from "./session-utils-projection.js";
 import { buildGatewaySessionRow } from "./session-utils-row.js";
-import type { GatewaySessionRow, SessionsListResult } from "./session-utils.types.js";
+import type {
+  GatewaySessionRow,
+  SessionListModelCatalog,
+  SessionsListResult,
+} from "./session-utils.types.js";
 
 // Bound synchronous projection work without repeatedly requeueing cheap prepared rows.
 const SESSIONS_LIST_YIELD_INTERVAL_MS = 12;
@@ -52,6 +56,36 @@ export type SessionListProjectionTiming = {
   rowSyncMs: number;
   yieldWaitMs: number;
   yieldCount: number;
+};
+
+type SessionListCpuTiming = {
+  startSyncCpu: () => NodeJS.CpuUsage | undefined;
+  finishSyncCpu: (
+    metric: "prepareThreadCpuMs" | "rowThreadCpuMs",
+    started: NodeJS.CpuUsage | undefined,
+  ) => void;
+};
+
+type SessionSelectionScope =
+  | { opts: SessionsListParams; targetsBySessionKey: GatewayStoredSessionTargets }
+  | {
+      opts: Omit<SessionsListParams, "search"> & { search?: never };
+      targetsBySessionKey?: never;
+    };
+
+type ListSessionsFromStoreParams = {
+  cfg: OpenClawConfig;
+  durableStorePath?: string;
+  entryFilter?: (key: string, entry: SessionEntry) => boolean;
+  storePath: string;
+  store: Record<string, SessionEntry>;
+  // Sentinels retain the first projected store's owner; their raw key cannot recover it.
+  targetsBySessionKey: GatewayStoredSessionTargets;
+  modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
+  opts: SessionsListParams;
+  involvingActorId?: string;
+  ownerFirstActorId?: string;
+  projectActiveRun?: SessionListActiveRunProjector;
 };
 
 type SessionEntrySelection = Omit<SessionListFilteredEntries, "ownerEntries"> & {
