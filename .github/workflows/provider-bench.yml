@@ -20,13 +20,6 @@ jobs:
               "workers": 6,
               "storage": "full-tmpfs",
             }
-          - {
-              "name": "c6id-nvme",
-              "label": "runs-on=${{ github.run_id }}/cpu=16/ram=32/family=c6id/spot=true/volume=80gb",
-              "provider": "runson",
-              "workers": 6,
-              "storage": "nvme",
-            }
     env:
       CI: "true"
       NODE_OPTIONS: --max-old-space-size=8192
@@ -218,7 +211,7 @@ jobs:
           rm -rf node_modules
           find ui packages extensions examples -mindepth 1 -maxdepth 2 \( -type d -o -type l \) -name node_modules -exec rm -rf -- {} +
           test -n "$STORE_PATH" && test "$STORE_PATH" != /
-          find "$STORE_PATH" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+          rm -rf -- "$STORE_PATH"
       - name: Restore warm pnpm store
         id: warm
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
