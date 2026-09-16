@@ -3,7 +3,7 @@ import { iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import type { SqliteSessionEntryCacheValidityToken } from "./session-accessor.sqlite-entry-cache.js";
+import type { SqliteSessionEntryRevision } from "./session-accessor.sqlite-entry-revision.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import {
   getSessionMaintenanceActivityAt,
@@ -13,7 +13,7 @@ import {
 import type { SessionEntry } from "./types.js";
 
 type AgeFact = {
-  token: SqliteSessionEntryCacheValidityToken;
+  token: SqliteSessionEntryRevision;
   oldestUpdatedAt: number;
   oldestDashboardActivityAt: number;
   next?: { policy: string; at: number };
@@ -44,7 +44,7 @@ export function hasSessionEntryMaintenanceAgeFact(db: DatabaseSync): boolean {
 
 export function readSessionEntryMaintenanceAgeFact(
   db: DatabaseSync,
-  token: SqliteSessionEntryCacheValidityToken,
+  token: SqliteSessionEntryRevision,
 ): AgeFact | undefined {
   const fact = ageFacts.get(db);
   if (
@@ -143,7 +143,7 @@ function nextEntryAgeAt(
 /** Plan facts use one timestamp projection; prompt payloads never enter JavaScript. */
 export function recordSessionEntryMaintenanceAgeFact(
   database: OpenClawAgentDatabase,
-  token: SqliteSessionEntryCacheValidityToken,
+  token: SqliteSessionEntryRevision,
   maintenance: ResolvedSessionMaintenanceConfig,
 ): void {
   const next = { policy: agePolicy(maintenance), at: Infinity };
@@ -188,7 +188,7 @@ export function recordSessionEntryMaintenanceAgeFact(
 /** Infinity leaves the kick's periodic recheck in charge of released live protection. */
 export function readSessionEntryMaintenanceNextAgeAt(
   database: OpenClawAgentDatabase,
-  token: SqliteSessionEntryCacheValidityToken,
+  token: SqliteSessionEntryRevision,
   maintenance: ResolvedSessionMaintenanceConfig,
 ): number | undefined {
   if (maintenance.mode !== "enforce") {
