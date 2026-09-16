@@ -128,14 +128,14 @@ Only pending reads coalesce; completed results are not cached. Physical integrit
 verification remains with full registry restoration and Doctor, while known
 database failures and quarantine still refuse summary reads.
 
-Session listing loads complete persisted subagent metadata in the shared-state
-worker through a read-only connection. The existing cache coalesces pending fills
+`sessions.list` and `sessions.describe` load complete persisted subagent metadata
+in the shared-state worker through a read-only connection. The existing cache coalesces pending fills
 and applies intervening named updates and deletions before publishing its first
 complete snapshot. Full replacement, registry ownership changes, and database
 retirement fence obsolete replies. Its 500 ms freshness policy and retention
 rules remain unchanged. Gateway, embedded, and TUI callers merge accepted rows
 with current host memory and scheduler facts before building the full topology.
-Pure topology grouping yields through the shared session-list work budget.
+Pure topology grouping yields through the shared session-projection work budget.
 Synchronous readers reuse the same SQL and row decoder; runtime reads do not
 repair storage.
 
