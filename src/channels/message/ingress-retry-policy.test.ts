@@ -1,4 +1,4 @@
-// Retry policy: backoff, attempt floor + age gate for dead-letter.
+// Retry policy: persisted backoff and a hard dead-letter attempt budget.
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { describe, expect, it } from "vitest";
 import {
@@ -91,10 +91,10 @@ describe("ingress retry policy", () => {
       expected: false,
     },
     {
-      name: "age below gate",
+      name: "young event at hard limit",
       attempt: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
       ageMs: DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS - 1,
-      expected: false,
+      expected: true,
     },
     {
       name: "both attempt floor and age met",
@@ -108,7 +108,7 @@ describe("ingress retry policy", () => {
       ageMs: DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS * 2,
       expected: true,
     },
-  ])("dead-letter requires both gates: $name", ({ attempt, ageMs, expected }) => {
+  ])("dead-letter respects hard limit: $name", ({ attempt, ageMs, expected }) => {
     const receivedAt = 1_000;
     expect(
       shouldDeadLetterRetryableIngressEvent({ receivedAt }, attempt, undefined, receivedAt + ageMs),
@@ -133,9 +133,9 @@ describe("ingress retry policy", () => {
     });
   });
 
-  it("disposition dead-letters only when both gates pass", () => {
+  it("disposition dead-letters at the attempt limit regardless of age", () => {
     const receivedAt = 1_000;
-    // Attempt floor met, age gate not → keep retrying.
+    // A young poison event must not keep its lane blocked for 24 hours.
     const young = resolveIngressFailureDisposition({
       err: new Error("transient"),
       event: {
@@ -145,7 +145,7 @@ describe("ingress retry policy", () => {
       formatError: coerceErrorMessage,
       now: receivedAt + DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS - 1,
     });
-    expect(young.kind).toBe("release");
+    expect(young.kind).toBe("fail");
 
     // Both gates met → dead-letter.
     const aged = resolveIngressFailureDisposition({

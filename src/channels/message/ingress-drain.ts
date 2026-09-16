@@ -3,6 +3,10 @@
  *
  * Owns claim recovery, per-lane serialization, adoption-time complete, retry /
  * dead-letter disposition, pre-adoption stall watchdog, and optional supersede.
+ *
+ * Post-deployment note: After deploying this patch, check the production DB for
+ * any lingering ingress events with attempts >= 5. They will be dead-lettered
+ * on the first drain cycle, which is desired behavior but should be verified.
  */
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import {
@@ -392,7 +396,18 @@ export function createChannelIngressDrain<
         await releaseUnadopted(state, { recordAttempt: false });
       },
       onAbandoned: async () => {
-        await releaseUnadopted(state, { lastError: "turn-abandoned" });
+        if (state.phase !== "deferred" && state.phase !== "dispatching") {
+          return;
+        }
+        if (state.guillotined || state.superseded) {
+          return;
+        }
+        // Mirrors releaseUnadopted guards; cannot delegate because disposition may dead-letter.
+        // Abandonment is a failed admission, not a cancellation. Spend the same
+        // durable retry budget so deferred recovery cannot bypass quarantine.
+        await state.settleOnce(async () => {
+          await applyFailureDisposition(state.claim, new Error("turn-abandoned"));
+        });
       },
     };
   };

@@ -1,17 +1,19 @@
+import { computeBackoff } from "../../infra/backoff.js";
 /**
  * Generic ingress retry backoff and dead-letter decisions.
  *
  * Channel-specific non-retryable classification stays out of core; pass it in.
  */
-import { computeBackoff } from "../../infra/backoff.js";
+import { isAdmissionConflictError } from "../../sessions/session-admission-conflict.js";
 
-export const DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS = 8;
+export const DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS = 5;
 export const DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS = 24 * 60 * 60 * 1000;
 export const DEFAULT_INGRESS_RETRY_BASE_MS = 1_000;
 export const DEFAULT_INGRESS_RETRY_MAX_MS = 3 * 60_000;
 
 export type IngressRetryPolicyConfig = {
   maxAttempts?: number;
+  /** Legacy hint; never delays the hard attempt limit. */
   deadLetterMinAgeMs?: number;
   baseMs?: number;
   maxMs?: number;
@@ -44,7 +46,9 @@ type IngressFailureDisposition =
 
 function resolveConfig(config?: IngressRetryPolicyConfig) {
   return {
-    maxAttempts: config?.maxAttempts ?? DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
+    maxAttempts: Number.isFinite(config?.maxAttempts)
+      ? Math.max(1, Math.min(20, Math.floor(config!.maxAttempts!)))
+      : DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
     deadLetterMinAgeMs: config?.deadLetterMinAgeMs ?? DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
     baseMs: config?.baseMs ?? DEFAULT_INGRESS_RETRY_BASE_MS,
     maxMs: config?.maxMs ?? DEFAULT_INGRESS_RETRY_MAX_MS,
@@ -75,17 +79,20 @@ export function resolveIngressRetryDelayMs(
 }
 
 /**
- * Dead-letter requires BOTH attempt floor and minimum age.
- * Over-limit events keep retrying at the capped delay until age is met.
+ * An age gate must never extend a poison event's hard attempt budget.
+ * Failed rows retain the original payload for explicit operator replay.
+ *
+ * @param _event Unused after the hard attempt limit replaced the age gate.
+ * @param _now Unused after the hard attempt limit replaced the age gate.
  */
 export function shouldDeadLetterRetryableIngressEvent(
-  event: IngressRetryEventFacts,
+  _event: IngressRetryEventFacts,
   attempt: number,
   config?: IngressRetryPolicyConfig,
-  now = Date.now(),
+  _now = Date.now(),
 ): boolean {
-  const { maxAttempts, deadLetterMinAgeMs } = resolveConfig(config);
-  return attempt >= maxAttempts && now - event.receivedAt >= deadLetterMinAgeMs;
+  const { maxAttempts } = resolveConfig(config);
+  return attempt >= maxAttempts;
 }
 
 /** Resolve release vs fail for a dispatch error using optional non-retryable hook. */
@@ -109,7 +116,15 @@ export function resolveIngressFailureDisposition(params: {
       attempt,
     };
   }
-  if (shouldDeadLetterRetryableIngressEvent(params.event, attempt, params.config, now)) {
+  // Repeated ownership conflicts cannot be repaired by replaying the same admission.
+  // Preserve the event after three failures; never bypass the session owner.
+  // Use isAdmissionConflictError (fingerprint fallback) so wrapped/coerced errors
+  // still receive the 3-attempt cap instead of the generic 5-attempt default.
+  const config =
+    isAdmissionConflictError(params.err)
+      ? { ...params.config, maxAttempts: Math.min(3, resolveConfig(params.config).maxAttempts) }
+      : params.config;
+  if (shouldDeadLetterRetryableIngressEvent(params.event, attempt, config, now)) {
     return {
       kind: "fail",
       reason: "retry-limit-exceeded",
