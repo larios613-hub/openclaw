@@ -1,0 +1,327 @@
+name: Provider benchmark 3
+on:
+  push:
+    branches: [ci-probe/provider-bench-3-20260916]
+permissions:
+  contents: read
+jobs:
+  bench:
+    name: bench3 / ${{ matrix.name }}
+    runs-on: ${{ matrix.label }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {
+              "name": "bm32",
+              "label": "blacksmith-32vcpu-ubuntu-2404",
+              "provider": "blacksmith",
+              "workers": 4,
+              "storage": "default",
+            }
+          - {
+              "name": "c8i-ebs",
+              "label": "runs-on=${{ github.run_id }}/cpu=16/ram=32/family=c8i/spot=true/volume=80gb",
+              "provider": "runson",
+              "workers": 6,
+              "storage": "ebs",
+            }
+          - {
+              "name": "c7a-ebs",
+              "label": "runs-on=${{ github.run_id }}/cpu=16/ram=32/family=c7a/spot=true/volume=80gb",
+              "provider": "runson",
+              "workers": 6,
+              "storage": "ebs",
+            }
+          - {
+              "name": "c7a-tmpfs",
+              "label": "runs-on=${{ github.run_id }}/cpu=16/ram=32/family=c7a/spot=true/volume=80gb",
+              "provider": "runson",
+              "workers": 6,
+              "storage": "tmpfs",
+            }
+          - {
+              "name": "m7a-full-tmpfs",
+              "label": "runs-on=${{ github.run_id }}/cpu=16/ram=64/family=m7a/spot=true/volume=80gb",
+              "provider": "runson",
+              "workers": 6,
+              "storage": "full-tmpfs",
+            }
+          - {
+              "name": "c6id-nvme",
+              "label": "runs-on=${{ github.run_id }}/cpu=16/ram=32/family=c6id/spot=true/volume=80gb",
+              "provider": "runson",
+              "workers": 6,
+              "storage": "nvme",
+            }
+          - {
+              "name": "c7a-fast-ebs",
+              "label": "runs-on=${{ github.run_id }}/cpu=16/ram=32/family=c7a/spot=true/volume=80gb:gp3:1000mbs:16000iops",
+              "provider": "runson",
+              "workers": 6,
+              "storage": "ebs",
+            }
+          - {
+              "name": "hosted",
+              "label": "ubuntu-24.04",
+              "provider": "hosted",
+              "workers": 3,
+              "storage": "default",
+            }
+          - {
+              "name": "bm32-tmpfs",
+              "label": "blacksmith-32vcpu-ubuntu-2404",
+              "provider": "blacksmith",
+              "workers": 4,
+              "storage": "tmpfs",
+            }
+    env:
+      CI: "true"
+      NODE_OPTIONS: --max-old-space-size=8192
+      OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: "1"
+      OPENCLAW_VITEST_MAX_WORKERS: ${{ matrix.workers }}
+      OPENCLAW_VITEST_NO_OUTPUT_RETRY: "0"
+    steps:
+      - uses: runs-on/action@v2
+        if: matrix.provider == 'runson'
+      - name: Prepare storage before checkout
+        shell: bash
+        working-directory: /
+        env:
+          BENCH_STORAGE: ${{ matrix.storage }}
+        run: |
+          set -euo pipefail
+          echo "BENCH_STORAGE recipe=$BENCH_STORAGE"
+          lsblk -o NAME,TYPE,SIZE,FSTYPE,MOUNTPOINTS,MODEL
+          if [[ "$BENCH_STORAGE" == tmpfs || "$BENCH_STORAGE" == full-tmpfs ]]; then
+            sudo mount -t tmpfs -o size=24g,mode=1777 tmpfs /tmp
+            test "$(findmnt -T /tmp -n -o FSTYPE)" = tmpfs
+          fi
+          if [[ "$BENCH_STORAGE" == full-tmpfs ]]; then
+            sudo mkdir -p "$GITHUB_WORKSPACE"
+            sudo mount -t tmpfs -o size=40g,uid="$(id -u)",gid="$(id -g)" tmpfs "$GITHUB_WORKSPACE"
+            test "$(findmnt -T "$GITHUB_WORKSPACE" -n -o FSTYPE)" = tmpfs
+          fi
+          if [[ "$BENCH_STORAGE" == nvme ]]; then
+            # RunsOn's Linux image owns instance-store formatting and placement.
+            test -d /mnt/ephemeral
+            findmnt /mnt/ephemeral
+            lsblk -o NAME,TYPE,SIZE,FSTYPE,MOUNTPOINTS,MODEL
+            for directory in /tmp "$GITHUB_WORKSPACE"; do
+              test "$(findmnt -T "$directory" -n -o MAJ:MIN)" = "$(findmnt -T /mnt/ephemeral -n -o MAJ:MIN)"
+            done
+            echo "BENCH_STORAGE nvme=automatic-runson-ephemeral"
+          fi
+          for directory in /tmp "$GITHUB_WORKSPACE"; do
+            findmnt -T "$directory"
+            df -h "$directory"
+          done
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup Node 26
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "26"
+          package-manager-cache: false
+          check-latest: true
+      - name: Machine facts and benchmark timer
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --version
+          nproc
+          free -b
+          df -h /
+          df -B1 /
+          lscpu
+          node -e 'const os=require("node:os"); console.log("BENCH_FACTS "+JSON.stringify({node:process.version,cpus:os.availableParallelism(),ram:os.totalmem(),model:os.cpus()[0].model}))'
+          node --input-type=module -e 'import {isSupportedOpenClawNodeVersion} from "./node-version.mjs"; if (!isSupportedOpenClawNodeVersion(process.versions.node)) throw Error("Unsupported benchmark Node: "+process.version); console.log("BENCH_NODE "+process.version)'
+          echo "BENCH_ENVIRONMENT"
+          uname -a
+          cat /etc/os-release
+          cat /proc/self/cgroup
+          for file in /sys/fs/cgroup/cpu.max /sys/fs/cgroup/memory.max /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq; do
+            echo "BENCH_ENV_FILE $file"
+            cat "$file" 2>/dev/null || true
+          done
+          dpkg-query -W libc6 libsqlite3-0 libstdc++6 coreutils bash git 2>/dev/null || true
+          ulimit -a
+          df -hi / "$GITHUB_WORKSPACE" /tmp
+          for path in / "$GITHUB_WORKSPACE" /tmp; do findmnt -T "$path" -o TARGET,SOURCE,FSTYPE -n || true; done
+          for tool in bash git rg node python3; do command -v "$tool" || true; done
+          bash --version | head -1
+          git --version
+          if command -v rg >/dev/null; then rg --version; fi
+          python3 - <<'PYTHON'
+          import socket
+          try:
+              with socket.socket(socket.AF_INET6) as s: s.bind(("::1",0))
+              print("BENCH_IPV6 loopback=available")
+          except OSError as e:
+              print("BENCH_IPV6 loopback=unavailable errno="+str(e.errno))
+          PYTHON
+          cat > "$RUNNER_TEMP/bench-phase" <<'SH'
+          #!/usr/bin/env bash
+          set -uo pipefail
+          phase="$1"
+          shift
+          start=$(date +%s%N)
+          python3 scripts/ci-provider-bench-phase.py "$phase" "$@"
+          result=$?
+          end=$(date +%s%N)
+          awk -v phase="$phase" -v start="$start" -v end="$end" -v result="$result" 'BEGIN { printf "BENCH phase=%s seconds=%.3f exit=%d\n", phase, (end-start)/1000000000, result }'
+          exit "$result"
+          SH
+          chmod +x "$RUNNER_TEMP/bench-phase"
+      - name: EC2 instance facts
+        if: matrix.provider == 'runson'
+        shell: bash
+        run: |
+          set -euo pipefail
+          imds_token=$(curl -fsS --connect-timeout 2 --max-time 5 -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token) || exit 0
+          for fact in instance-type placement/availability-zone; do
+            value=$(curl -fsS --connect-timeout 2 --max-time 5 -H "X-aws-ec2-metadata-token: $imds_token" "http://169.254.169.254/latest/meta-data/$fact") || continue
+            echo "BENCH_EC2 $fact=$value"
+          done
+      - name: CPU loops
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          cat > "$RUNNER_TEMP/provider-loop.cjs" <<'JS'
+          const { Worker, isMainThread, parentPort } = require('node:worker_threads');
+          const { availableParallelism } = require('node:os');
+          if (!isMainThread) {
+            const begin = performance.now();
+            let sum = 0;
+            for (let i = 0; i < 300_000_000; i++) sum += i % 7;
+            parentPort.postMessage({ seconds: (performance.now() - begin) / 1000, sum });
+          } else {
+            (async () => {
+              for (const n of [1, availableParallelism()]) {
+                const begin = performance.now();
+                const results = await Promise.all(Array.from({ length: n }, () => new Promise((resolve, reject) => {
+                  const worker = new Worker(__filename);
+                  worker.once('message', resolve);
+                  worker.once('error', reject);
+                })));
+                console.log(`BENCH phase=loop_${n === 1 ? 'one' : 'all'} seconds=${((performance.now()-begin)/1000).toFixed(3)} workers=${n} iterations_per_worker=300000000 results=${JSON.stringify(results)}`);
+              }
+            })().catch(e => { console.error(e); process.exitCode=1; });
+          }
+          JS
+          node "$RUNNER_TEMP/provider-loop.cjs"
+      - name: Install Corepack for Node 26
+        run: npm install --global corepack@0.35.0
+      - name: Setup ordinary pnpm
+        uses: ./.github/actions/setup-pnpm-store-cache
+        with:
+          node-version: "26"
+          cache-mode: off
+      - name: Prepare cold store
+        id: store
+        env:
+          BENCH_STORAGE: ${{ matrix.storage }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          store_path=$(pnpm store path --silent)
+          test -n "$store_path" && test "$store_path" != /
+          rm -rf -- "$store_path"
+          mkdir -p "$store_path"
+          if [[ "$BENCH_STORAGE" == full-tmpfs ]]; then
+            mkdir -p "$GITHUB_WORKSPACE/.provider-bench-store"
+            sudo mount --bind "$GITHUB_WORKSPACE/.provider-bench-store" "$store_path"
+          fi
+          findmnt -T "$store_path"
+          echo "BENCH_STORE path=$store_path"
+          echo "path=$store_path" >> "$GITHUB_OUTPUT"
+          pnpm --version
+      - name: Cold cache lookup
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.store.outputs.path }}
+          key: provider-bench-3-pnpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}
+      - name: Install cold
+        run: '"$RUNNER_TEMP/bench-phase" install_cold pnpm install --frozen-lockfile --config.ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true --prefer-offline'
+      - name: Save ordinary pnpm store
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.store.outputs.path }}
+          key: provider-bench-3-pnpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}
+      - name: Remove modules and saved store
+        env:
+          STORE_PATH: ${{ steps.store.outputs.path }}
+        run: |
+          rm -rf node_modules
+          find ui packages extensions examples -mindepth 1 -maxdepth 2 \( -type d -o -type l \) -name node_modules -exec rm -rf -- {} +
+          test -n "$STORE_PATH" && test "$STORE_PATH" != /
+          find "$STORE_PATH" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+      - name: Restore warm pnpm store
+        id: warm
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.store.outputs.path }}
+          key: provider-bench-3-pnpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}
+          fail-on-cache-miss: true
+      - name: Install warm
+        run: '"$RUNNER_TEMP/bench-phase" install_warm pnpm install --frozen-lockfile --config.ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true --prefer-offline'
+      - name: Storage microbenchmarks
+        run: python3 scripts/ci-provider-bench-io.py
+      - name: Select fixed groups and verify effective worker counts
+        env:
+          BENCH_ROW: ${{ matrix.name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --import tsx --input-type=module <<'JS'
+          import { appendFileSync } from 'node:fs';
+          import { createHash } from 'node:crypto';
+          import { createNodeTestShards } from './scripts/lib/ci-node-test-plan.mts';
+          import { resolveLocalVitestScheduling } from './scripts/lib/vitest-local-scheduling.mts';
+          const names = ['agentic-agents-support'];
+          const all = createNodeTestShards();
+          const groups = names.map(name => {
+            const shard = all.find(s => s.shardName === name);
+            if (!shard?.configs?.length || shard.pretestBuildMode === 'private-qa') throw Error('Invalid benchmark group: '+name);
+            return { configs: shard.configs, includePatterns: shard.includePatterns, env: shard.env, shard_name: name };
+          });
+          const desired = Number(process.env.OPENCLAW_VITEST_MAX_WORKERS);
+          const resolved = resolveLocalVitestScheduling().maxWorkers;
+          if (resolved !== desired) throw Error(`Worker override was clamped: ${desired} -> ${resolved}`);
+          for (const config of new Set(groups.flatMap(g => g.configs))) {
+            const effective = (await import('./'+config)).default.test;
+            if (effective.maxWorkers !== desired || effective.fileParallelism !== true) throw Error(`Unexpected config worker policy: ${config}`);
+            console.log('BENCH_CONFIG '+JSON.stringify({config,maxWorkers:effective.maxWorkers,fileParallelism:effective.fileParallelism}));
+          }
+          appendFileSync(process.env.GITHUB_ENV, `OPENCLAW_NODE_TEST_GROUPS_JSON=${JSON.stringify(groups)}\n`);
+          console.log('BENCH_GROUPS '+JSON.stringify({row:process.env.BENCH_ROW,groups,workersPerGroup:resolved,groupCount:groups.length,digest:createHash('sha256').update(JSON.stringify(groups)).digest('hex')}));
+          JS
+          echo "BENCH_WORKERS cpus=$(nproc) workers=$OPENCLAW_VITEST_MAX_WORKERS plans=$OPENCLAW_NODE_TEST_PLAN_CONCURRENCY"
+      - name: Build CI runtime
+        env:
+          VITEST: "1"
+          OPENCLAW_BUILD_PRIVATE_QA: "0"
+        run: '"$RUNNER_TEMP/bench-phase" build pnpm build qaRuntime'
+      - name: Run fixed workload
+        id: tests
+        continue-on-error: true
+        env:
+          BENCH_PHASE: test_storage
+        run: '"$RUNNER_TEMP/bench-phase" "$BENCH_PHASE" timeout --signal=TERM --kill-after=20s 2100s node --import tsx scripts/ci-run-node-test-shard.mts'
+      - name: Final resource and test outcome
+        if: always()
+        env:
+          TEST_OUTCOME: ${{ steps.tests.outcome }}
+        run: |
+          df -h / "$GITHUB_WORKSPACE" /tmp
+          df -i / "$GITHUB_WORKSPACE" /tmp
+          free -b
+          for file in /proc/pressure/cpu /proc/pressure/memory /proc/pressure/io /sys/fs/cgroup/memory.events /sys/fs/cgroup/memory.peak /sys/fs/cgroup/cpu.stat; do
+            echo "BENCH_RESOURCE_FILE $file"
+            cat "$file" 2>/dev/null || true
+          done
+          echo "BENCH_OUTCOMES test=$TEST_OUTCOME"
+          test "$TEST_OUTCOME" = success
