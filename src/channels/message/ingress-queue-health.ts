@@ -115,17 +115,17 @@ export function collectIngressBacklogHealth(stateDir?: string): IngressBacklogHe
   const quarantineByKey = new Map<string, number>();
   for (const row of quarantineRows) {
     const key = `${row.channelId}\0${row.accountId}`;
-    quarantineByKey.set(key, row.quarantineCount as number); // SQLite returns unknown type
+    quarantineByKey.set(key, row.quarantineCount as number); // SAFETY: SQLite returns unknown type
   }
 
   // Build health summaries from pending data + dispatch counters + quarantine counts.
   const results: IngressBacklogHealth[] = [];
   for (const row of pendingRows) {
-    const channelId = row.channelId as string; // column is TEXT
-    const accountId = row.accountId as string; // column is TEXT
+    const channelId = row.channelId as string; // SAFETY: column is TEXT
+    const accountId = row.accountId as string; // SAFETY: column is TEXT
     const queueName = JSON.stringify([channelId, accountId]);
-    const pendingCount = row.pendingCount as number; // column is INTEGER
-    const oldestReceivedAt = row.oldestReceivedAt as number | null; // column is INTEGER or NULL
+    const pendingCount = row.pendingCount as number; // SAFETY: column is INTEGER
+    const oldestReceivedAt = row.oldestReceivedAt as number | null; // SAFETY: column is INTEGER or NULL
     const oldestPendingAge = oldestReceivedAt !== null ? Math.max(0, Math.floor((now - oldestReceivedAt) / 1000)) : 0;
     const quarantineCount = quarantineByKey.get(`${channelId}\0${accountId}`) ?? 0;
     const counters = dispatchCountersByQueue.get(queueName);
@@ -158,14 +158,14 @@ export function collectIngressBacklogHealth(stateDir?: string): IngressBacklogHe
 
   // Also include accounts that have quarantine events but no pending events.
   for (const row of quarantineRows) {
-    const channelId = row.channelId as string; // column is TEXT
-    const accountId = row.accountId as string; // column is TEXT
+    const channelId = row.channelId as string; // SAFETY: column is TEXT
+    const accountId = row.accountId as string; // SAFETY: column is TEXT
     
     if (results.some((r) => r.channelId === channelId && r.accountId === accountId)) {
       continue;
     }
     const queueName = JSON.stringify([channelId, accountId]);
-    const quarantineCount = row.quarantineCount as number; // column is INTEGER
+    const quarantineCount = row.quarantineCount as number; // SAFETY: column is INTEGER
     const counters = dispatchCountersByQueue.get(queueName);
     results.push({
       channelId,
