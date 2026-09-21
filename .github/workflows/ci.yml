@@ -10,7 +10,7 @@ jobs:
     env:
       CI: "1"
       NODE_OPTIONS: --max-old-space-size=8192
-      OPENCLAW_STATE_DIR: ${{ runner.temp }}/p0-synthetic-state
+      OPENCLAW_STATE_DIR: /tmp/p0-synthetic-state
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
