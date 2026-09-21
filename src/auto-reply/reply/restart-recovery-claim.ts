@@ -20,6 +20,7 @@ import type { InternalSessionEntry as SessionEntry } from "../../config/sessions
 import { resolveSessionWorkerPlacementContext } from "../../gateway/session-worker-placement-context.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { createAgentRunStaleLifecycleError } from "../../infra/agent-lifecycle-error.js";
+import { SessionAdmissionConflictError } from "../../sessions/session-admission-conflict.js";
 import type {
   UserTurnTranscriptRecorder,
   UserTurnTranscriptTarget,
@@ -139,7 +140,9 @@ export function createReplyRestartRecoveryClaimController(params: {
         sessionLifecyclePatch: options.patch,
       });
       if (!result?.sessionEntry) {
-        throw new Error("session changed before durable user-turn admission");
+        throw new SessionAdmissionConflictError(
+          "session changed before durable user-turn admission",
+        );
       }
       return result.sessionEntry as SessionEntry;
     }
@@ -154,7 +157,9 @@ export function createReplyRestartRecoveryClaimController(params: {
           : null,
     );
     if (!persisted) {
-      throw new Error("restart recovery claim changed before agent adoption");
+      throw new SessionAdmissionConflictError(
+        "restart recovery claim changed before agent adoption",
+      );
     }
     return persisted;
   };
@@ -178,7 +183,7 @@ export function createReplyRestartRecoveryClaimController(params: {
         : undefined;
     const result = await recorder.persistApproved({ target, expectedSessionId: sessionId });
     if (!result) {
-      throw new Error("session changed before durable user-turn admission");
+      throw new SessionAdmissionConflictError("session changed before durable user-turn admission");
     }
     if (result.sessionEntry) {
       params.setEntry(result.sessionEntry as SessionEntry);
@@ -199,7 +204,7 @@ export function createReplyRestartRecoveryClaimController(params: {
         hydrateSkillPromptRefs: false,
       }) ?? params.getEntry();
     if (!entry || entry.sessionId !== sessionId) {
-      throw new Error("session changed before durable user-turn admission");
+      throw new SessionAdmissionConflictError("session changed before durable user-turn admission");
     }
     const admissionRunId = normalizeOptionalString(params.admissionRunId);
     const sourceTurnId = normalizeOptionalString(params.sourceTurnId);
@@ -236,7 +241,9 @@ export function createReplyRestartRecoveryClaimController(params: {
     }
     if (isExactRecoveryClaim) {
       if (entry.status !== "running" || entry.abortedLastRun === true) {
-        throw new Error("restart recovery claim changed before agent adoption");
+        throw new SessionAdmissionConflictError(
+          "restart recovery claim changed before agent adoption",
+        );
       }
       // Clear the retry verifier as the exact admitted claim crosses into execution.
       const preservesTerminalReceipt =
@@ -276,7 +283,9 @@ export function createReplyRestartRecoveryClaimController(params: {
         (sourceMessage as { idempotencyKey?: unknown } | undefined)?.idempotencyKey,
       );
       if (!recorder || persistedSourceTurnId !== sourceTurnId) {
-        throw new Error("channel restart recovery requires source-keyed user-turn admission");
+        throw new SessionAdmissionConflictError(
+          "channel restart recovery requires source-keyed user-turn admission",
+        );
       }
     }
     if (!recoverableDeliveryContext && !activeClaimRunId) {
@@ -292,7 +301,9 @@ export function createReplyRestartRecoveryClaimController(params: {
         entry.status === "running" ||
         entry.restartRecoveryDeliveryReceiptState === "terminal-pending")
     ) {
-      throw new Error("restart recovery claim changed before agent adoption");
+      throw new SessionAdmissionConflictError(
+        "restart recovery claim changed before agent adoption",
+      );
     }
     const retiredClaim = activeClaimRunId
       ? buildRestartRecoveryClaimCleanupPatch({
@@ -384,7 +395,9 @@ export function createReplyRestartRecoveryClaimController(params: {
         { skipMaintenance: true, takeCacheOwnership: true },
       );
       if (!persisted) {
-        throw new Error("before_agent_reply checkpoint lost restart recovery ownership");
+        throw new SessionAdmissionConflictError(
+          "before_agent_reply checkpoint lost restart recovery ownership",
+        );
       }
       params.setEntry(persisted);
     };
@@ -409,7 +422,9 @@ export function createReplyRestartRecoveryClaimController(params: {
         { skipMaintenance: true, takeCacheOwnership: true },
       );
       if (!persisted) {
-        throw new Error("before_agent_reply start lost restart recovery ownership");
+        throw new SessionAdmissionConflictError(
+          "before_agent_reply start lost restart recovery ownership",
+        );
       }
       params.setEntry(persisted);
       return true;

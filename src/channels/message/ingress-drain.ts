@@ -401,7 +401,17 @@ export function createChannelIngressDrain<
         await releaseUnadopted(state, { recordAttempt: false });
       },
       onAbandoned: async () => {
-        await releaseUnadopted(state, { lastError: "turn-abandoned" });
+        if (state.phase !== "dispatching" && state.phase !== "deferred") {
+          return;
+        }
+        if (state.guillotined || state.superseded) {
+          return;
+        }
+        // Abandonment is a failed admission, not cancellation. Keep the claim
+        // and watchdog live until the same bounded disposition commits.
+        await state.settleOnce(async () => {
+          await applyFailureDisposition(state.claim, new Error("turn-abandoned"));
+        });
       },
     };
   };
