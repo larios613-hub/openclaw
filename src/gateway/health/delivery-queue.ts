@@ -1,6 +1,7 @@
 import {
   countChannelIngressQueuePressure,
   countFailedChannelIngressQueueEntries,
+  collectIngressBacklogHealth,
 } from "../../channels/message/ingress-queue-health.js";
 import { countFailedDeliveryQueueEntries } from "../../infra/delivery-queue-sqlite.js";
 import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
@@ -45,12 +46,24 @@ export function buildDeliveryQueueHealthSummary(
       countChannelIngressQueuePressure,
     );
 
-  if (failed.length === 0 && ingressFailed.length === 0 && ingressPressure.length === 0) {
+  // FIX 5: Ingress backlog health metrics (pending count, oldest age, dispatch counters).
+  const ingressBacklog = readQueueHealth(
+    "channel ingress backlog health read failed",
+    collectIngressBacklogHealth,
+  );
+
+  if (
+    failed.length === 0 &&
+    ingressFailed.length === 0 &&
+    ingressPressure.length === 0 &&
+    ingressBacklog.length === 0
+  ) {
     return undefined;
   }
   return {
     failed,
     ...(ingressFailed.length > 0 ? { ingressFailed } : {}),
     ...(ingressPressure.length > 0 ? { ingressPressure } : {}),
+    ...(ingressBacklog.length > 0 ? { ingressBacklog } : {}),
   };
 }

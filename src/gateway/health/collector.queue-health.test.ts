@@ -74,6 +74,18 @@ describe("queue health collector", () => {
         ingressFailed: [
           { channelId: "telegram", accountId: "ops", count: 1, oldestFailedAt: 50_000 },
         ],
+        ingressBacklog: [
+          {
+            channelId: "telegram",
+            accountId: "ops",
+            ingressPendingCount: 0,
+            ingressOldestPendingAge: 0,
+            ingressDispatchSuccessCount: 0,
+            ingressDispatchFailureCount: 0,
+            ingressQuarantineCount: 1,
+            ingressHealthStatus: "unhealthy",
+          },
+        ],
       });
     } finally {
       await openClawState.cleanup();
@@ -156,6 +168,18 @@ describe("queue health collector", () => {
             claimedCount: 0,
             blockedCount: 55,
             oldestReceivedAt: now - 60_000,
+          },
+        ],
+        ingressBacklog: [
+          {
+            channelId: "telegram",
+            accountId: "ops",
+            ingressPendingCount: expect.any(Number),
+            ingressOldestPendingAge: expect.any(Number),
+            ingressDispatchSuccessCount: 0,
+            ingressDispatchFailureCount: 0,
+            ingressQuarantineCount: 0,
+            ingressHealthStatus: expect.stringMatching(/^(healthy|degraded|unhealthy)$/),
           },
         ],
       });

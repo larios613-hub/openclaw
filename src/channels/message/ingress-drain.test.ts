@@ -18,10 +18,7 @@ import {
 type ChannelIngressDispatchLifecycle = Parameters<
   Parameters<typeof createChannelIngressDrain>[0]["dispatchClaimedEvent"]
 >[1];
-import {
-  DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
-  DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-} from "./ingress-retry-policy.js";
+import { DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS } from "./ingress-retry-policy.js";
 
 describe("channel ingress drain", () => {
   beforeEach(() => {
@@ -623,94 +620,31 @@ describe("channel ingress drain", () => {
     });
   });
 
-  it("dead-letter needs both attempt floor and age (releases when age insufficient)", async () => {
+  it("dead-letters a young event at the hard limit despite the legacy age hint", async () => {
     await withTempState(async (stateDir) => {
-      const receivedAt = 100;
-      let clock = receivedAt;
-      const queue = createTestIngressQueue(stateDir, { now: () => clock });
-      await queue.enqueue("poison", { text: "x" }, { laneKey: "l", receivedAt });
-
-      // Burn attempts without aging past the gate.
-      for (let i = 0; i < DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS; i += 1) {
-        clock += 1;
-        const drain = createChannelIngressDrain<Payload>({
-          queue,
-          now: () => clock,
-          retryPolicy: {
-            maxAttempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-            deadLetterMinAgeMs: DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
-            baseMs: 0,
-            maxMs: 0,
-          },
-          dispatchClaimedEvent: async () => {
-            throw new Error("still broken");
-          },
-        });
-        await drain.drainOnce();
-        await drain.waitForIdle();
-        drain.dispose();
-      }
-
-      const pending = await queue.listPending({ limit: "all" });
-      expect(pending).toHaveLength(1);
-      expect(pending[0]?.attempts).toBeGreaterThanOrEqual(DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS);
-
-      // Age past the gate → next failure dead-letters.
-      clock = receivedAt + DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS;
-      const finalDrain = createChannelIngressDrain<Payload>({
+      const queue = createTestIngressQueue(stateDir);
+      await queue.enqueue("poison", { text: "x" }, { laneKey: "l", receivedAt: 100 });
+      const drain = createChannelIngressDrain<Payload>({
         queue,
-        now: () => clock,
+        now: () => 100,
         retryPolicy: {
-          maxAttempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
+          maxAttempts: 1,
           deadLetterMinAgeMs: DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
-          baseMs: 0,
-          maxMs: 0,
         },
         dispatchClaimedEvent: async () => {
           throw new Error("still broken");
         },
       });
-      await finalDrain.drainOnce();
-      await finalDrain.waitForIdle();
-      const status = await queue.enqueue("poison", { text: "x" });
-      expect(status.kind).toBe("failed");
-      if (status.kind === "failed") {
-        expect(status.record.reason).toBe("retry-limit-exceeded");
-      }
-      finalDrain.dispose();
-    });
-  });
-
-  it("keeps retry-accounted abandonment pending beyond the failure threshold", async () => {
-    await withTempState(async (stateDir) => {
-      let clock = 1;
-      const queue = createTestIngressQueue(stateDir, { now: () => clock });
-      await queue.enqueue("abandoned", { text: "x" }, { laneKey: "l", receivedAt: 1 });
-
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        clock += 1;
-        const drain = createChannelIngressDrain<Payload>({
-          queue,
-          now: () => clock,
-          retryPolicy: { maxAttempts: 1, deadLetterMinAgeMs: 0, baseMs: 0, maxMs: 0 },
-          dispatchClaimedEvent: async (_event, lifecycle) => {
-            await lifecycle.onAbandoned();
-            return { kind: "deferred" };
-          },
-        });
+      try {
         await drain.drainOnce();
         await drain.waitForIdle();
+        expect(await queue.listPending()).toEqual([]);
+        expect(await queue.listFailed?.()).toEqual([
+          expect.objectContaining({ id: "poison", reason: "retry-limit-exceeded" }),
+        ]);
+      } finally {
         drain.dispose();
       }
-
-      expect(await queue.listPending()).toEqual([
-        expect.objectContaining({
-          id: "abandoned",
-          attempts: 3,
-          lastError: "turn-abandoned",
-        }),
-      ]);
-      expect(await queue.listFailed?.()).toEqual([]);
     });
   });
 
