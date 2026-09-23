@@ -3,6 +3,10 @@
  *
  * Owns claim recovery, per-lane serialization, adoption-time complete, retry /
  * dead-letter disposition, pre-adoption stall watchdog, and optional supersede.
+ *
+ * Post-deployment note: After deploying this patch, check the production DB for
+ * any lingering ingress events with attempts >= 5. They will be dead-lettered
+ * on the first drain cycle, which is desired behavior but should be verified.
  */
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import {
@@ -31,6 +35,11 @@ import {
   type ChannelIngressDrainDispatchResult,
 } from "./ingress-drain-state.js";
 import { supersedeActiveStatesIfNeeded } from "./ingress-drain-supersede.js";
+import {
+  recordIngressDispatchSuccess,
+  recordIngressDispatchFailure,
+  recordIngressQuarantine,
+} from "./ingress-queue-health.js";
 import type {
   ChannelIngressQueue,
   ChannelIngressQueueClaim,
@@ -94,6 +103,15 @@ export type CreateChannelIngressDrainOptions<
   orderBy?: "received" | "id";
   scanLimit?: number;
   startLimit?: number;
+  /**
+   * FIX 4: Set of sender IDs whose messages receive direct-user dispatch priority.
+   * When set, events whose metadata.senderId matches one of these IDs are
+   * sorted before all other pending events. Events without a senderId in this
+   * set are dispatched at normal priority.
+   *
+   * If unset, priority is resolved purely from metadata.priority field.
+   */
+  prioritySenders?: ReadonlySet<string>;
 };
 
 export type ChannelIngressDrain = {
@@ -125,6 +143,7 @@ export function createChannelIngressDrain<
   const scanLimit = Math.max(1, Math.floor(options.scanLimit ?? 100));
   const startLimit = options.startLimit ?? 32;
   const deferredLaneOccupancy = options.deferredLaneOccupancy ?? "hold";
+  const prioritySenders = options.prioritySenders;
   const activeByClaim = new Map<string, ActiveHandlerState<TPayload, TMetadata>>();
   const laneOwnerByKey = new Map<string, ActiveHandlerState<TPayload, TMetadata>>();
   let disposed = false;
@@ -259,6 +278,8 @@ export function createChannelIngressDrain<
           `spooled update ${displayId} on lane ${claim.laneKey ?? displayId} reached retry limit after ${disposition.attempt} attempts; dead-lettered`,
         );
       }
+      recordIngressDispatchFailure(claim.queueName);
+      recordIngressQuarantine(claim.queueName);
       await failClaim(claim, disposition.reason, disposition.message);
       return;
     }
@@ -343,6 +364,7 @@ export function createChannelIngressDrain<
         await state.settleOnce(async () => {
           await completeClaimWithRetry(state.claim);
         });
+        recordIngressDispatchSuccess(state.claim.queueName);
       },
       onDeferred: () => {
         if (state.phase !== "dispatching") {
@@ -392,7 +414,18 @@ export function createChannelIngressDrain<
         await releaseUnadopted(state, { recordAttempt: false });
       },
       onAbandoned: async () => {
-        await releaseUnadopted(state, { lastError: "turn-abandoned" });
+        if (state.phase !== "deferred" && state.phase !== "dispatching") {
+          return;
+        }
+        if (state.guillotined || state.superseded) {
+          return;
+        }
+        // Mirrors releaseUnadopted guards; cannot delegate because disposition may dead-letter.
+        // Abandonment is a failed admission, not a cancellation. Spend the same
+        // durable retry budget so deferred recovery cannot bypass quarantine.
+        await state.settleOnce(async () => {
+          await applyFailureDisposition(state.claim, new Error("turn-abandoned"));
+        });
       },
     };
   };
@@ -430,7 +463,7 @@ export function createChannelIngressDrain<
       superseded: false,
       task: Promise.resolve(),
       settleOnce: async () => {},
-    } as ActiveHandlerState<TPayload, TMetadata>;
+    } as ActiveHandlerState<TPayload, TMetadata>; // SAFETY: handler state shape is guaranteed by createActiveHandlerState
     state.settleOnce = createIngressSettleOwner(state, removeActive);
     const lifecycle = createLifecycle(state);
     armStallWatchdog(state);
@@ -490,6 +523,7 @@ export function createChannelIngressDrain<
           await state.settleOnce(async () => {
             await completeClaimWithRetry(claim);
           });
+          recordIngressDispatchSuccess(claim.queueName);
         }
       } catch (err) {
         if (isStopped() || state.phase === "settled") {
@@ -565,7 +599,10 @@ export function createChannelIngressDrain<
 
     await recoverStaleClaims();
 
-    const pending = await queue.listPending({ limit: "all", orderBy });
+    const rawPending = await queue.listPending({ limit: "all", orderBy });
+    // FIX 4: Pending events are partitioned into direct-priority and normal-priority
+    // groups for two-phase claiming. See claimFromCandidates below.
+    const pending = rawPending;
     const claims = await queue.listClaims();
     const activeLaneKeys = new Set(laneOwnerByKey.keys());
     const claimedLaneKeys = new Set(
@@ -618,85 +655,121 @@ export function createChannelIngressDrain<
       }
     }
 
-    const candidateWindow = new Map<string, string>();
-    let nextCandidateIndex = 0;
-    const refillCandidateWindow = () => {
-      for (const [id, laneKey] of candidateWindow) {
-        if (blockedLaneKeys.has(laneKey)) {
-          candidateWindow.delete(id);
-        }
+    // FIX 4: Partition pending events into priority groups for two-phase claiming.
+    // Phase 1: direct-user messages. Phase 2: normal-priority messages.
+    // claimNext sorts by received_at internally, so FIFO is preserved within each phase.
+    // Direct-priority events on non-blocked lanes are claimed before any normal events.
+    const eventLaneByKey = new Map<string, string>();
+    const directCandidateIds: string[] = [];
+    const normalCandidateIds: string[] = [];
+    for (const [index, event] of pending.entries()) {
+      if (retryDelayed[index] === 1) {
+        continue;
       }
-      while (candidateWindow.size < scanLimit && nextCandidateIndex < pending.length) {
-        const index = nextCandidateIndex;
-        const event = pending[index]!;
-        nextCandidateIndex += 1;
-        if (retryDelayed[index] === 1) {
-          continue;
+      const laneKey = resolveLaneKey(event, options.deriveLaneKey, options.reconcileStoredLaneKey);
+      eventLaneByKey.set(event.id, laneKey);
+      if (blockedLaneKeys.has(laneKey)) {
+        continue;
+      }
+      // Check priority from metadata, respecting prioritySenders config.
+      // When prioritySenders is configured, it is authoritative (deny-by-default).
+      const metadata = event.metadata as { priority?: string; senderId?: string } | undefined; // SAFETY: metadata shape is guaranteed by the channel ingress codec
+      const isDirect = prioritySenders
+        ? metadata?.senderId !== undefined && prioritySenders.has(metadata.senderId)
+        : metadata?.priority === "direct";
+      if (isDirect) {
+        directCandidateIds.push(event.id);
+      } else {
+        normalCandidateIds.push(event.id);
+      }
+    }
+
+    // Claim loop: two-phase. All direct candidates first, then normal candidates.
+    // Each phase uses its own candidate window so claimNext's received_at sort
+    // only affects FIFO within the same priority level.
+    let started = 0;
+    const claimFromCandidates = async (
+      candidateIds: readonly string[],
+      startCursor: number,
+    ): Promise<{ started: number; nextCursor: number }> => {
+      let cursor = startCursor;
+      let phaseStarted = 0;
+      const window = new Map<string, string>();
+      const refill = () => {
+        for (const [id, laneKey] of window) {
+          if (blockedLaneKeys.has(laneKey)) {
+            window.delete(id);
+          }
+        }
+        while (window.size < scanLimit && cursor < candidateIds.length) {
+          const id = candidateIds[cursor]!;
+          cursor += 1;
+          const laneKey = eventLaneByKey.get(id);
+          if (laneKey && !blockedLaneKeys.has(laneKey)) {
+            window.set(id, laneKey);
+          }
+        }
+      };
+      while (phaseStarted < startLimit - started) {
+        if (shouldStop()) {
+          break;
+        }
+        refill();
+        if (window.size === 0) {
+          break;
+        }
+        const claimed = await queue.claimNext({
+          ownerId,
+          blockedLaneKeys,
+          orderBy,
+          scanLimit,
+          candidateIds: window.keys(),
+          deriveLaneKey: options.deriveLaneKey,
+          ...(options.reconcileStoredLaneKey
+            ? { reconcileStoredLaneKey: options.reconcileStoredLaneKey }
+            : {}),
+        });
+        if (!claimed) {
+          break;
+        }
+        window.delete(claimed.id);
+        if (shouldStop()) {
+          await queue.release(claimed, { recordAttempt: false });
+          break;
         }
         const laneKey = resolveLaneKey(
-          event,
+          claimed,
           options.deriveLaneKey,
           options.reconcileStoredLaneKey,
         );
-        if (!blockedLaneKeys.has(laneKey)) {
-          candidateWindow.set(event.id, laneKey);
+        const existing = laneOwnerByKey.get(laneKey);
+        if (existing && existing.phase !== "settled") {
+          if (await supersedeActiveIfNeeded(claimed, laneKey)) {
+            blockedLaneKeys.delete(laneKey);
+          }
+          if (laneOwnerByKey.has(laneKey)) {
+            await queue.release(claimed, { recordAttempt: false });
+            blockedLaneKeys.add(laneKey);
+            continue;
+          }
         }
+        runClaimed(claimed, laneKey);
+        blockedLaneKeys.add(laneKey);
+        phaseStarted += 1;
       }
+      return { started: phaseStarted, nextCursor: cursor };
     };
 
-    let started = 0;
-    while (started < startLimit) {
-      if (shouldStop()) {
-        break;
-      }
-      // Candidate membership freezes this pass to the analyzed snapshot. A
-      // scan-sized window avoids binding the full backlog, and the forward-only
-      // cursor keeps released rows to one attempt in this pass.
-      refillCandidateWindow();
-      if (candidateWindow.size === 0) {
-        break;
-      }
-      const claimed = await queue.claimNext({
-        ownerId,
-        blockedLaneKeys,
-        orderBy,
-        scanLimit,
-        candidateIds: candidateWindow.keys(),
-        deriveLaneKey: options.deriveLaneKey,
-        ...(options.reconcileStoredLaneKey
-          ? { reconcileStoredLaneKey: options.reconcileStoredLaneKey }
-          : {}),
-      });
-      if (!claimed) {
-        break;
-      }
-      // One snapshot row gets one attempt per pass. A released claim remains
-      // pending for the next pump instead of spinning through SQLite here.
-      candidateWindow.delete(claimed.id);
-      if (shouldStop()) {
-        await queue.release(claimed, { recordAttempt: false });
-        break;
-      }
-      const laneKey = resolveLaneKey(
-        claimed,
-        options.deriveLaneKey,
-        options.reconcileStoredLaneKey,
-      );
-      const existing = laneOwnerByKey.get(laneKey);
-      if (existing && existing.phase !== "settled") {
-        if (await supersedeActiveIfNeeded(claimed, laneKey)) {
-          blockedLaneKeys.delete(laneKey);
-        }
-        if (laneOwnerByKey.has(laneKey)) {
-          await queue.release(claimed, { recordAttempt: false });
-          blockedLaneKeys.add(laneKey);
-          continue;
-        }
-      }
-      runClaimed(claimed, laneKey);
-      blockedLaneKeys.add(laneKey);
-      started += 1;
+    // Phase 1: claim direct-priority candidates.
+    const directResult = await claimFromCandidates(directCandidateIds, 0);
+    started += directResult.started;
+
+    // Phase 2: claim normal-priority candidates (only if direct candidates exhausted).
+    if (!shouldStop() && started < startLimit) {
+      const normalResult = await claimFromCandidates(normalCandidateIds, 0);
+      started += normalResult.started;
     }
+
     return { started };
   };
 
