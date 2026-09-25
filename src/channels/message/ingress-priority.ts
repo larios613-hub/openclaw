@@ -38,8 +38,8 @@ const PRIORITY_RANK: Record<IngressPriority, number> = {
  * If `prioritySenders` is provided, events whose metadata.senderId is in the
  * set are treated as "direct" priority regardless of the metadata.priority field.
  */
-export function resolveIngressPriority<TMetadata extends IngressPriorityMetadata | undefined>(
-  metadata: TMetadata,
+export function resolveIngressPriority(
+  metadata: IngressPriorityMetadata | undefined,
   prioritySenders?: ReadonlySet<string>,
 ): IngressPriority {
   // When prioritySenders allowlist is configured, it is authoritative —
@@ -131,8 +131,8 @@ export function partitionByPriority<
 /**
  * Check whether an event is a direct-user message.
  */
-export function isDirectUserMessage<TMetadata extends IngressPriorityMetadata | undefined>(
-  metadata: TMetadata,
+export function isDirectUserMessage(
+  metadata: IngressPriorityMetadata | undefined,
   prioritySenders?: ReadonlySet<string>,
 ): boolean {
   return resolveIngressPriority(metadata, prioritySenders) === "direct";

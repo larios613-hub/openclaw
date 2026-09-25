@@ -24,7 +24,6 @@ import {
 } from "./ingress-retry-policy.js";
 import { ChannelIngressUnavailableError } from "./ingress-unavailable.js";
 import { createDirectUserWatchdog } from "./ingress-watchdog.js";
-import type { DirectUserWatchdogConfig } from "./ingress-watchdog.js";
 
 const DEFAULT_APPEND_RETRY_DELAYS_MS = [0, 100, 300] as const;
 
@@ -110,7 +109,9 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
   // Watchdog: direct-user message watchdog (FIX 6)
   let watchdog: ReturnType<typeof createDirectUserWatchdog> | undefined;
   const ensureWatchdog = () => {
-    if (watchdog || !options.watchdog?.enabled) return;
+    if (watchdog || !options.watchdog?.enabled) {
+      return;
+    }
     watchdog = createDirectUserWatchdog({
       queue: getQueue(),
       ...options.watchdog,

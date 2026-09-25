@@ -80,3 +80,7 @@
 // - Rate-limited: max 1 restart per 5 minutes
 // - Cannot be disabled by untrusted input (config comes from trusted channel config)
 // - Does NOT interfere with duplicate-dispatch prevention or audit fail-closed
+
+// This file is a design spec only. The integration above has been applied
+// directly to ingress-monitor.ts. This file is retained for documentation.
+void 0;

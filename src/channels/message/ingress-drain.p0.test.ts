@@ -57,6 +57,7 @@ describe("bounded ingress failure recovery", () => {
                 throw new Error("permanent dispatch failure");
               }
               await lifecycle.onAdopted();
+              return { kind: "completed" };
             },
           });
         let drain = createDrain();

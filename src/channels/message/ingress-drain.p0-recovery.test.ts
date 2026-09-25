@@ -74,6 +74,7 @@ describe("P0 durable poison recovery", () => {
                 throw new Error("permanent dispatch failure");
               }
               await lifecycle.onAdopted();
+              return { kind: "completed" };
             },
           });
         let drain = createDrain();
