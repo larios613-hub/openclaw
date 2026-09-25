@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createChannelIngressDrain } from "./ingress-drain.js";
-import { createTestIngressQueue, withTempState } from "./ingress-drain.test-helpers.js";
+import {
+  createTestIngressQueue,
+  withTempState,
+  type IngressDrainTestPayload,
+} from "./ingress-drain.test-helpers.js";
 import {
   compareIngressPriority,
   createDirectUserMetadata,
@@ -48,28 +52,60 @@ describe("FIX 4: direct-user message priority", () => {
 
   describe("compareIngressPriority", () => {
     it("sorts direct-user messages before normal messages", () => {
-      const direct = { receivedAt: 200, id: "evt-2", metadata: { priority: "direct" as const } };
-      const normal = { receivedAt: 100, id: "evt-1", metadata: { priority: "normal" as const } };
+      const direct: { receivedAt: number; id: string; metadata?: IngressPriorityMetadata } = {
+        receivedAt: 200,
+        id: "evt-2",
+        metadata: { priority: "direct" },
+      };
+      const normal: { receivedAt: number; id: string; metadata?: IngressPriorityMetadata } = {
+        receivedAt: 100,
+        id: "evt-1",
+        metadata: { priority: "normal" },
+      };
       expect(compareIngressPriority(direct, normal)).toBeLessThan(0);
       expect(compareIngressPriority(normal, direct)).toBeGreaterThan(0);
     });
 
     it("preserves FIFO order within same priority (by receivedAt)", () => {
-      const a = { receivedAt: 100, id: "evt-1", metadata: { priority: "direct" as const } };
-      const b = { receivedAt: 200, id: "evt-2", metadata: { priority: "direct" as const } };
+      const a: { receivedAt: number; id: string; metadata?: IngressPriorityMetadata } = {
+        receivedAt: 100,
+        id: "evt-1",
+        metadata: { priority: "direct" },
+      };
+      const b: { receivedAt: number; id: string; metadata?: IngressPriorityMetadata } = {
+        receivedAt: 200,
+        id: "evt-2",
+        metadata: { priority: "direct" },
+      };
       expect(compareIngressPriority(a, b)).toBeLessThan(0);
     });
 
     it("preserves FIFO order within same priority (by id when receivedAt ties)", () => {
-      const a = { receivedAt: 100, id: "aaa", metadata: { priority: "normal" as const } };
-      const b = { receivedAt: 100, id: "bbb", metadata: { priority: "normal" as const } };
+      const a: { receivedAt: number; id: string; metadata?: IngressPriorityMetadata } = {
+        receivedAt: 100,
+        id: "aaa",
+        metadata: { priority: "normal" },
+      };
+      const b: { receivedAt: number; id: string; metadata?: IngressPriorityMetadata } = {
+        receivedAt: 100,
+        id: "bbb",
+        metadata: { priority: "normal" },
+      };
       expect(compareIngressPriority(a, b)).toBeLessThan(0);
     });
 
     it("respects prioritySenders for sorting", () => {
       const senders = new Set(["eric"]);
-      const direct = { receivedAt: 200, id: "evt-2", metadata: { senderId: "eric" } };
-      const normal = { receivedAt: 100, id: "evt-1", metadata: {} };
+      const direct: { receivedAt: number; id: string; metadata?: IngressPriorityMetadata } = {
+        receivedAt: 200,
+        id: "evt-2",
+        metadata: { senderId: "eric" },
+      };
+      const normal: { receivedAt: number; id: string; metadata?: IngressPriorityMetadata } = {
+        receivedAt: 100,
+        id: "evt-1",
+        metadata: {},
+      };
       expect(compareIngressPriority(direct, normal, senders)).toBeLessThan(0);
     });
   });
@@ -92,8 +128,8 @@ describe("FIX 4: direct-user message priority", () => {
         { receivedAt: 200, id: "direct-1", metadata: { priority: "direct" as const } },
       ];
       const sorted = sortPendingByPriority(events);
-      expect(events[0].id).toBe("normal-1"); // Original unchanged
-      expect(sorted[0].id).toBe("direct-1");
+      expect(events[0]?.id).toBe("normal-1"); // Original unchanged
+      expect(sorted[0]?.id).toBe("direct-1");
     });
 
     it("handles events without metadata", () => {
@@ -102,7 +138,7 @@ describe("FIX 4: direct-user message priority", () => {
         { receivedAt: 200, id: "direct-1", metadata: { priority: "direct" as const } },
       ];
       const sorted = sortPendingByPriority(events);
-      expect(sorted[0].id).toBe("direct-1");
+      expect(sorted[0]?.id).toBe("direct-1");
     });
   });
 
@@ -165,7 +201,10 @@ describe("FIX 4: direct-user message priority", () => {
     it("dispatches direct-user messages before normal-priority messages", async () => {
       await withTempState(async (stateDir) => {
         const clock = 10_000;
-        const queue = createTestIngressQueue(stateDir, { now: () => clock });
+        const queue = createTestIngressQueue<IngressDrainTestPayload, IngressPriorityMetadata>(
+          stateDir,
+          { now: () => clock },
+        );
         // Enqueue a normal-priority message first (earlier receivedAt).
         await queue.enqueue(
           "cron-1",
@@ -209,7 +248,10 @@ describe("FIX 4: direct-user message priority", () => {
     it("preserves FIFO within direct-user messages", async () => {
       await withTempState(async (stateDir) => {
         const clock = 10_000;
-        const queue = createTestIngressQueue(stateDir, { now: () => clock });
+        const queue = createTestIngressQueue<IngressDrainTestPayload, IngressPriorityMetadata>(
+          stateDir,
+          { now: () => clock },
+        );
         await queue.enqueue(
           "dm-1",
           { text: "first DM" },
@@ -260,7 +302,10 @@ describe("FIX 4: direct-user message priority", () => {
     it("respects prioritySenders config for per-sender priority", async () => {
       await withTempState(async (stateDir) => {
         const clock = 10_000;
-        const queue = createTestIngressQueue(stateDir, { now: () => clock });
+        const queue = createTestIngressQueue<IngressDrainTestPayload, IngressPriorityMetadata>(
+          stateDir,
+          { now: () => clock },
+        );
         // No explicit priority in metadata, but senderId matches prioritySenders.
         await queue.enqueue(
           "cron-1",
@@ -304,7 +349,10 @@ describe("FIX 4: direct-user message priority", () => {
     it("does NOT preempt currently running operations", async () => {
       await withTempState(async (stateDir) => {
         const clock = 10_000;
-        const queue = createTestIngressQueue(stateDir, { now: () => clock });
+        const queue = createTestIngressQueue<IngressDrainTestPayload, IngressPriorityMetadata>(
+          stateDir,
+          { now: () => clock },
+        );
         // Start a normal-priority event first.
         await queue.enqueue(
           "cron-1",

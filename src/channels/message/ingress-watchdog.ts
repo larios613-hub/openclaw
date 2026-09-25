@@ -19,7 +19,7 @@
 
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isDirectUserMessage, type IngressPriorityMetadata } from "./ingress-priority.js";
-import type { ChannelIngressQueue } from "./ingress-queue.js";
+import type { ChannelIngressQueueRecord } from "./ingress-queue.js";
 
 /** Watchdog configuration. */
 export type DirectUserWatchdogConfig = {
@@ -77,6 +77,52 @@ const DEFAULT_ERROR_THRESHOLD_MS = 300_000;
 const DEFAULT_RECOVERY_RATE_LIMIT_MS = 5 * 60_000;
 
 /**
+ * Minimal queue interface the watchdog needs: only listPending.
+ *
+ * The watchdog reads metadata from pending records but does not enqueue or
+ * claim, so it only needs a read-only view. Accepting unconstrained metadata
+ * here lets the monitor wire the watchdog without constraining its own
+ * TMetadata generic — the watchdog narrows metadata at runtime via
+ * isDirectUserMessage, which handles undefined and non-priority shapes safely.
+ */
+export type WatchdogQueue<TPayload> = {
+  listPending(options?: {
+    limit?: number | "all";
+    orderBy?: "received" | "id";
+  }): Promise<Array<ChannelIngressQueueRecord<TPayload>>>;
+};
+
+/**
+ * Narrow unknown metadata to IngressPriorityMetadata | undefined via a runtime
+ * check. This is type-safe — not a type assertion — because it validates the
+ * shape before use. Metadata that is not an object with optional priority/
+ * senderId string fields is treated as undefined (normal priority).
+ */
+function toIngressPriorityMetadata(metadata: unknown): IngressPriorityMetadata | undefined {
+  if (metadata === undefined || metadata === null) {
+    return undefined;
+  }
+  if (typeof metadata !== "object") {
+    return undefined;
+  }
+  // SAFETY: typeof object guard proved metadata is a non-null object; field types validated before use.
+  const obj = metadata as Record<string, unknown>;
+  const priority = obj.priority;
+  const senderId = obj.senderId;
+  // Only accept well-formed IngressPriorityMetadata shapes.
+  if (priority !== undefined && priority !== "direct" && priority !== "normal") {
+    return undefined;
+  }
+  if (senderId !== undefined && typeof senderId !== "string") {
+    return undefined;
+  }
+  return {
+    ...(priority !== undefined ? { priority } : {}),
+    ...(senderId !== undefined ? { senderId } : {}),
+  };
+}
+
+/**
  * Create a direct-user message watchdog.
  *
  * The watchdog periodically scans the ingress queue for undispatched direct-user
@@ -93,12 +139,9 @@ const DEFAULT_RECOVERY_RATE_LIMIT_MS = 5 * 60_000;
  *   // ... later
  *   watchdog.stop();
  */
-export function createDirectUserWatchdog<
-  TPayload,
-  TMetadata extends IngressPriorityMetadata | undefined,
->(
+export function createDirectUserWatchdog<TPayload>(
   config: {
-    queue: ChannelIngressQueue<TPayload, TMetadata>;
+    queue: WatchdogQueue<TPayload>;
   } & DirectUserWatchdogConfig,
 ) {
   const checkIntervalMs = config.checkIntervalMs ?? DEFAULT_CHECK_INTERVAL_MS;
@@ -127,7 +170,8 @@ export function createDirectUserWatchdog<
     const stuck: DirectUserStuckMessage[] = [];
 
     for (const event of pending) {
-      if (!isDirectUserMessage(event.metadata, prioritySenders)) {
+      const metadata = toIngressPriorityMetadata(event.metadata);
+      if (!isDirectUserMessage(metadata, prioritySenders)) {
         continue;
       }
       const ageMs = currentTime - event.receivedAt;
@@ -140,7 +184,7 @@ export function createDirectUserWatchdog<
           receivedAt: event.receivedAt,
           ageMs,
           ...(event.laneKey !== undefined ? { laneKey: event.laneKey } : {}),
-          ...(event.metadata?.senderId !== undefined ? { senderId: event.metadata.senderId } : {}),
+          ...(metadata?.senderId !== undefined ? { senderId: metadata.senderId } : {}),
         });
       }
     }

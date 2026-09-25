@@ -49,8 +49,8 @@ describe("FIX 5: ingress-backlog health reporting", () => {
         ingressPendingCount: 1,
         ingressHealthStatus: "healthy",
       });
-      expect(health[0].ingressOldestPendingAge).toBeLessThan(60);
-      expect(health[0].ingressDispatchSuccessCount).toBe(1);
+      expect(health[0]?.ingressOldestPendingAge).toBeLessThan(60);
+      expect(health[0]?.ingressDispatchSuccessCount).toBe(1);
     });
   });
 
@@ -113,8 +113,8 @@ describe("FIX 5: ingress-backlog health reporting", () => {
 
       const health = collectIngressBacklogHealth(stateDir);
       expect(health).toHaveLength(1);
-      expect(health[0].ingressDispatchSuccessCount).toBe(2);
-      expect(health[0].ingressDispatchFailureCount).toBe(1);
+      expect(health[0]?.ingressDispatchSuccessCount).toBe(2);
+      expect(health[0]?.ingressDispatchFailureCount).toBe(1);
     });
   });
 
@@ -129,9 +129,9 @@ describe("FIX 5: ingress-backlog health reporting", () => {
 
       const health = collectIngressBacklogHealth(stateDir);
       expect(health).toHaveLength(1);
-      expect(health[0].ingressPendingCount).toBe(0);
-      expect(health[0].ingressQuarantineCount).toBe(1);
-      expect(health[0].ingressHealthStatus).toBe("unhealthy");
+      expect(health[0]?.ingressPendingCount).toBe(0);
+      expect(health[0]?.ingressQuarantineCount).toBe(1);
+      expect(health[0]?.ingressHealthStatus).toBe("unhealthy");
     });
   });
 });

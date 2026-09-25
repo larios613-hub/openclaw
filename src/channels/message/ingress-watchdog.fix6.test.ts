@@ -37,10 +37,7 @@ describe("FIX 6: direct-user message watchdog", () => {
       const logs: Array<{ level: string; message: string }> = [];
       const recoveryCalls: DirectUserStuckMessage[] = [];
 
-      const watchdog = createDirectUserWatchdog<
-        { text: string },
-        IngressPriorityMetadata | undefined
-      >({
+      const watchdog = createDirectUserWatchdog<{ text: string }>({
         queue: createTestIngressQueue(stateDir, { now: () => clock }),
         now: () => clock,
         warningThresholdMs: 60_000,
@@ -88,10 +85,7 @@ describe("FIX 6: direct-user message watchdog", () => {
       const logs: Array<{ level: string; message: string }> = [];
       const recoveryCalls: DirectUserStuckMessage[] = [];
 
-      const watchdog = createDirectUserWatchdog<
-        { text: string },
-        IngressPriorityMetadata | undefined
-      >({
+      const watchdog = createDirectUserWatchdog<{ text: string }>({
         queue: createTestIngressQueue(stateDir, { now: () => clock }),
         now: () => clock,
         warningThresholdMs: 60_000,
@@ -152,10 +146,7 @@ describe("FIX 6: direct-user message watchdog", () => {
 
       const recoveryCalls: DirectUserStuckMessage[] = [];
 
-      const watchdog = createDirectUserWatchdog<
-        { text: string },
-        IngressPriorityMetadata | undefined
-      >({
+      const watchdog = createDirectUserWatchdog<{ text: string }>({
         queue: createTestIngressQueue(stateDir, { now: () => clock }),
         now: () => clock,
         warningThresholdMs: 60_000,
@@ -201,10 +192,7 @@ describe("FIX 6: direct-user message watchdog", () => {
       closeOpenClawStateDatabaseForTest();
 
       const logs: Array<{ level: string; message: string }> = [];
-      const watchdog = createDirectUserWatchdog<
-        { text: string },
-        IngressPriorityMetadata | undefined
-      >({
+      const watchdog = createDirectUserWatchdog<{ text: string }>({
         queue: createTestIngressQueue(stateDir, { now: () => clock }),
         now: () => clock,
         warningThresholdMs: 60_000,
@@ -241,10 +229,7 @@ describe("FIX 6: direct-user message watchdog", () => {
       closeOpenClawStateDatabaseForTest();
 
       const logs: Array<{ level: string; message: string }> = [];
-      const watchdog = createDirectUserWatchdog<
-        { text: string },
-        IngressPriorityMetadata | undefined
-      >({
+      const watchdog = createDirectUserWatchdog<{ text: string }>({
         queue: createTestIngressQueue(stateDir, { now: () => clock }),
         now: () => clock,
         prioritySenders: new Set(["eric"]),
@@ -281,10 +266,7 @@ describe("FIX 6: direct-user message watchdog", () => {
       closeOpenClawStateDatabaseForTest();
 
       let checkCount = 0;
-      const watchdog = createDirectUserWatchdog<
-        { text: string },
-        IngressPriorityMetadata | undefined
-      >({
+      const watchdog = createDirectUserWatchdog<{ text: string }>({
         queue: createTestIngressQueue(stateDir, { now: () => clock }),
         now: () => clock + 61_000, // Advance time so message is > 60s old.
         checkIntervalMs: 30_000,
@@ -328,10 +310,7 @@ describe("FIX 6: direct-user message watchdog", () => {
       closeOpenClawStateDatabaseForTest();
 
       const logs: Array<{ level: string; message: string }> = [];
-      const watchdog = createDirectUserWatchdog<
-        { text: string },
-        IngressPriorityMetadata | undefined
-      >({
+      const watchdog = createDirectUserWatchdog<{ text: string }>({
         queue: createTestIngressQueue(stateDir, { now: () => clock }),
         now: () => clock,
         warningThresholdMs: 60_000,

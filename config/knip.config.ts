@@ -511,6 +511,8 @@ const config = {
     "**/live-*.ts",
     "src/shared/text/assistant-visible-text.ts",
     bundledPluginFile("telegram", "src/draft-chunking.ts"),
+    // Stage A forward-port: design spec retained for documentation, not imported by production.
+    "src/channels/message/ingress-watchdog-runtime-wiring.ts",
   ],
   // Knip's `ignoreFiles` only suppresses unused-file findings. Test helpers
   // belong in `ignore` so they do not inflate unused-export/type findings.
@@ -554,6 +556,11 @@ const config = {
     // asserted by the focused Beam mirror tests; production wires only the service.
     "extensions/beam/src/mirror.ts": ["exports", "types"],
     "src/infra/heartbeat-wake.ts": ["exports"],
+    // Stage A forward-port: ingress priority, watchdog, and queue-health modules
+    // are tested directly but not yet wired into all production channel paths.
+    "src/channels/message/ingress-priority.ts": ["exports", "types"],
+    "src/channels/message/ingress-queue-health.ts": ["exports"],
+    "src/channels/message/ingress-watchdog.ts": ["exports", "types"],
   },
   workspaces: {
     ".": {

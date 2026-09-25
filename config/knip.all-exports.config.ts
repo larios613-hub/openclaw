@@ -159,6 +159,8 @@ const config = {
     // inputs, not executable roots.
     "test/external-script-modules.d.ts",
     "test/vitest/**/*.d.{mts,ts}",
+    // Stage A forward-port: design spec retained for documentation, not imported by production.
+    "src/channels/message/ingress-watchdog-runtime-wiring.ts",
   ],
   // Keep only build artifacts out of the full-tree export audit. In
   // particular, do not inherit production's test-support exclusions.
@@ -168,6 +170,10 @@ const config = {
   ignoreIssues: {
     // The memory-state compatibility facade must retain its pre-registry-bundle type export.
     "src/plugins/memory-state.ts": ["types"],
+    // Stage A forward-port: tested directly but not yet wired into all production paths.
+    "src/channels/message/ingress-priority.ts": ["exports", "types"],
+    "src/channels/message/ingress-queue-health.ts": ["exports"],
+    "src/channels/message/ingress-watchdog.ts": ["exports", "types"],
     "test/fixtures/ts-topology/basic/**": [
       "exports",
       "nsExports",

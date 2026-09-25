@@ -12,14 +12,18 @@ import { createChannelIngressQueue } from "./ingress-queue.js";
 
 export type IngressDrainTestPayload = { text: string };
 
-export function createTestIngressQueue(
+export function createTestIngressQueue<
+  TPayload = IngressDrainTestPayload,
+  TMetadata = unknown,
+  TCompletedMetadata = unknown,
+>(
   stateDir: string,
   options: Omit<
     Parameters<typeof createChannelIngressQueue>[0],
     "channelId" | "accountId" | "stateDir"
   > = {},
 ) {
-  return createChannelIngressQueue<IngressDrainTestPayload>({
+  return createChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>({
     channelId: "test",
     accountId: "a",
     stateDir,
