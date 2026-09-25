@@ -23,6 +23,8 @@ import {
   DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
 } from "./ingress-retry-policy.js";
 import { ChannelIngressUnavailableError } from "./ingress-unavailable.js";
+import { createDirectUserWatchdog } from "./ingress-watchdog.js";
+import type { DirectUserWatchdogConfig } from "./ingress-watchdog.js";
 
 const DEFAULT_APPEND_RETRY_DELAYS_MS = [0, 100, 300] as const;
 
@@ -104,6 +106,24 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
   const withAdmissionClaimLock = createAdmissionClaimLock();
   let stopTask: Promise<void> | undefined;
   let lastReportedActive = false;
+
+  // Watchdog: direct-user message watchdog (FIX 6)
+  let watchdog: ReturnType<typeof createDirectUserWatchdog> | undefined;
+  const ensureWatchdog = () => {
+    if (watchdog || !options.watchdog?.enabled) return;
+    watchdog = createDirectUserWatchdog({
+      queue: getQueue(),
+      ...options.watchdog,
+      onLog: (level, message) => {
+        options.onError?.(new Error(`[watchdog:${level}] ${message}`));
+      },
+      onRecovery: async () => {
+        // Recovery: send SIGUSR1 to trigger gateway restart
+        // Rate limiter in the watchdog prevents restart loops
+        process.kill(process.pid, "SIGUSR1");
+      },
+    });
+  };
 
   const clearSuspensionSubscription = (): void => {
     suspensionDrainPending = false;
@@ -693,6 +713,8 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
       // one more anonymous channel crash.
       ensureQueueAvailable();
       running = true;
+      ensureWatchdog();
+      watchdog?.start();
       unsubscribeSuspension ??= onGatewaySuspendAdmissionChange((phase) => {
         if (!running) {
           return;
@@ -734,6 +756,8 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
           await waitForActiveDeliveries();
         }
         // A pump may have created the lazy drain just before observing running=false.
+        watchdog?.stop();
+        watchdog = undefined;
         drain?.dispose();
         if (options.waitForDeliveryIdleOnStop !== false) {
           await drain?.waitForIdle();

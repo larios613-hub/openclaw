@@ -1,6 +1,7 @@
 import type { ChannelIngressDispatchLifecycle } from "./ingress-drain-lifecycle.js";
 import type { CreateChannelIngressDrainOptions } from "./ingress-drain.js";
 import type { ChannelIngressQueue, ChannelIngressQueueClaim } from "./ingress-queue.js";
+import type { DirectUserWatchdogConfig } from "./ingress-watchdog.js";
 
 /** Stable identity and serialization lane extracted before durable admission. */
 export type ChannelIngressMonitorFacts = { eventId: string; laneKey: string };
@@ -116,4 +117,9 @@ export type CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMet
   createStoppedError?: () => Error;
   /** Durable-after-stop preserves append-only admission for handlers selected before unregister. */
   admissionMode?: "until-stopped" | "while-running" | "durable-after-stop";
+  /** Optional direct-user message watchdog configuration. */
+  watchdog?: DirectUserWatchdogConfig & {
+    /** Whether the watchdog is enabled. Default: false (opt-in). */
+    enabled?: boolean;
+  };
 };
