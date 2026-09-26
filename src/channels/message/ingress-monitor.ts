@@ -112,8 +112,12 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     if (watchdog || !options.watchdog?.enabled) {
       return;
     }
+    // Narrow the queue to the WatchdogQueue interface — the watchdog only
+    // needs listPending, not the full ChannelIngressQueue metadata contract.
+    // This avoids constraining TMetadata globally while remaining type-safe.
+    const q = getQueue();
     watchdog = createDirectUserWatchdog({
-      queue: getQueue(),
+      queue: { listPending: (opts) => q.listPending(opts) },
       ...options.watchdog,
       onLog: (level, message) => {
         options.onError?.(new Error(`[watchdog:${level}] ${message}`));
