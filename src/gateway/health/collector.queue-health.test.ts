@@ -119,6 +119,18 @@ describe("queue health collector", () => {
         ingressFailed: [
           { channelId: "telegram", accountId: "ops", count: 1, oldestFailedAt: 50_000 },
         ],
+        ingressBacklog: expect.arrayContaining([
+          expect.objectContaining({
+            channelId: "telegram",
+            accountId: "ops",
+            ingressHealthStatus: expect.any(String),
+            ingressPendingCount: expect.any(Number),
+            ingressDispatchSuccessCount: expect.any(Number),
+            ingressDispatchFailureCount: expect.any(Number),
+            ingressQuarantineCount: expect.any(Number),
+            ingressOldestPendingAge: expect.any(Number),
+          }),
+        ]),
       });
     } finally {
       await openClawState.cleanup();
@@ -203,6 +215,18 @@ describe("queue health collector", () => {
             oldestReceivedAt: now - 60_000,
           },
         ],
+        ingressBacklog: expect.arrayContaining([
+          expect.objectContaining({
+            channelId: "telegram",
+            accountId: "ops",
+            ingressHealthStatus: expect.any(String),
+            ingressPendingCount: expect.any(Number),
+            ingressDispatchSuccessCount: expect.any(Number),
+            ingressDispatchFailureCount: expect.any(Number),
+            ingressQuarantineCount: expect.any(Number),
+            ingressOldestPendingAge: expect.any(Number),
+          }),
+        ]),
       });
       expect(JSON.stringify(snap.deliveryQueues)).not.toMatch(
         /private-lane|private-owner|private payload|private handler error|retry-head-private/,
